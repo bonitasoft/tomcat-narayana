@@ -20,6 +20,11 @@ import java.sql.SQLFeatureNotSupportedException;
 import java.util.Properties;
 import java.util.logging.Logger;
 
+import javax.naming.Context;
+import javax.naming.InitialContext;
+import javax.naming.NameClassPair;
+import javax.naming.NamingEnumeration;
+import javax.naming.NamingException;
 import javax.sql.DataSource;
 import javax.sql.XAConnection;
 import javax.sql.XADataSource;
@@ -37,7 +42,7 @@ public class NarayanaXADataSourceWrapper implements XADataSource, DataSource {
 
     private final TransactionalDriver txDriver = new TransactionalDriver();
 
-    private final String jndiName;
+    private final String ajurnaURL;
 
     /**
      * Create a wrapper around the provided XADataSource implementation,
@@ -49,46 +54,10 @@ public class NarayanaXADataSourceWrapper implements XADataSource, DataSource {
      *            tomcat's global JNDI, not a webapp specific JNDI context.
      * @param xaDS
      */
-    public NarayanaXADataSourceWrapper(final String jndiName, final XADataSource xaDS) {
+    public NarayanaXADataSourceWrapper(final String ajurnaURL, final XADataSource xaDS) {
         this.xaDS = xaDS;
-        this.jndiName = jndiName;
-    }
-
-    /**
-     * This is where most of the tomcat specific weirdness resides. You probably
-     * want to subclass and override this method for reuse in env other than tomcat.
-     * 
-     * @param url
-     *            The url the TransactionalDriver expects is:
-     *            'the arjuna driver's special prefix' followed by 'a JNDI name'.
-     *            Via ConnectionImple the IndirectRecoverableConnection.createDataSource method
-     *            attempts to look it up in JNDI
-     */
-    protected Connection getTransactionalConnection(final String url, final Properties properties) throws SQLException {
-        // Problem 1
-        // it always calls InitialContext(env), never InitalContext().
-        // The workaround is to copy the required env properties into ajurna config
-        // Warning: ensure the tx lifecycle listener is configured too in tomcat or there will be a
-        // possible race here, as recovery needs these properties too and may start first
-        NarayanaJndiPropertiesSetter.setJndiProperties();
-
-        // Problem 2
-        // this method has almost certainly been called by a webapp,
-        // which has its own InitialContext. Whilst the datasource is in there, we
-        // can't be certain it's under the same name as its global name. We also
-        // don't want any hassle with the webapp classloader, which may go away
-        // whilst recovery is still active. Hence we need to temporarily set things
-        // such that we use the server's global InitialContext for the lookup
-        // instead of the webapp one. Tomcat figures out the InitialContext based
-        // on classloader, so we fool it by changing the Thread context from the
-        // webapps classloader to its parent (the server's classloader):
-        final ClassLoader webappClassLoader = Thread.currentThread().getContextClassLoader();
-        Thread.currentThread().setContextClassLoader(webappClassLoader.getParent());
-        try {
-            return txDriver.connect(url, properties);
-        } finally {
-            Thread.currentThread().setContextClassLoader(webappClassLoader);
-        }
+        this.ajurnaURL = ajurnaURL;
+        // System.err.println("ARJUNA URL: ******* " + url + " *****");
     }
 
     /**
@@ -104,7 +73,6 @@ public class NarayanaXADataSourceWrapper implements XADataSource, DataSource {
      */
     @Override
     public Connection getConnection(final String username, final String password) throws SQLException {
-        final String url = TransactionalDriver.arjunaDriver + jndiName;
         final Properties properties = new Properties();
 
         if (username != null) {
@@ -114,8 +82,28 @@ public class NarayanaXADataSourceWrapper implements XADataSource, DataSource {
         if (password != null) {
             properties.setProperty(TransactionalDriver.password, password);
         }
+        // Warning: ensure the tx lifecycle listener is configured too in tomcat or there will be a
+        // possible race here, as recovery needs these properties too and may start first
+        NarayanaJndiPropertiesSetter.setJndiProperties();
 
-        return getTransactionalConnection(url, properties);
+        // try {
+        // printJNDI("java:comp/env");
+        // } catch (NamingException e) {
+        // e.printStackTrace();
+        // }
+
+        return txDriver.connect(ajurnaURL, properties);
+    }
+
+    private void printJNDI(final String name) throws NamingException {
+        final ClassLoader currentClassLoader = Thread.currentThread().getContextClassLoader();
+        System.err.println("Lising JNDI content for '" + name + "' from classloader: " + currentClassLoader);
+        final Context ctx = new InitialContext();
+        final NamingEnumeration<NameClassPair> list = ctx.list(name);
+        while (list.hasMore()) {
+            NameClassPair nc = list.next();
+            System.out.println(nc);
+        }
     }
 
     /**

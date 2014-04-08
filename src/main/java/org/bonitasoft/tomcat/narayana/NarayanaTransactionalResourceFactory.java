@@ -44,6 +44,8 @@ public class NarayanaTransactionalResourceFactory implements ObjectFactory {
 
     private static final String PARAMETER_HANDLER_CLASS_NAME_PARAMETER = PARAMETER_PREFIX + "param.handler.class";
 
+    private static final String AJURNA_URL = PARAMETER_PREFIX + "arjuna.url";
+
     static {
         // parameters that a default Tomcat resource may have
         IGNORED_PARAMETERS.add("factory");
@@ -56,11 +58,13 @@ public class NarayanaTransactionalResourceFactory implements ObjectFactory {
         // parameters that must not be transfered to the datasource instance
         IGNORED_PARAMETERS.add(XA_DS_CLASS_NAME_PARAMETER);
         IGNORED_PARAMETERS.add(PARAMETER_HANDLER_CLASS_NAME_PARAMETER);
+        IGNORED_PARAMETERS.add(AJURNA_URL);
     }
 
     /**
      * @see javax.naming.spi.ObjectFactory
      */
+    @Override
     public Object getObjectInstance(final Object obj, final Name name, final Context nameCtx, final Hashtable<?, ?> environment) throws Exception {
         // convert the Addresses into easier to handle String key/values
         final Reference ref = (Reference) obj;
@@ -100,14 +104,15 @@ public class NarayanaTransactionalResourceFactory implements ObjectFactory {
             parameterHandler.handlerParameter(xaDataSource, key.substring(PARAMETER_PREFIX.length()), resourceParameters.get(key));
         }
 
-        // build the JNDI name
-        final String jndiNameAsString = name.toString();
-        final String javaPrefix = "java:";
-        final String fullJNDIName = jndiNameAsString.startsWith(javaPrefix) ? jndiNameAsString : javaPrefix + jndiNameAsString;
+        // get arjunaURL
+        final String arjunaURL = resourceParameters.get(AJURNA_URL);
+        if (arjunaURL == null) {
+            throw new NamingException("No value specified for " + AJURNA_URL);
+        }
 
         // return a wrapper around the built & configured xaDataSource that will intercept all subsequent calls to this xaDataSource to make returned
         // connections bound the transaction manager
-        return new NarayanaXADataSourceWrapper(fullJNDIName, xaDataSource);
+        return new NarayanaXADataSourceWrapper(arjunaURL, xaDataSource);
     }
 
     /**
